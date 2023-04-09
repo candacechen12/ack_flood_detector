@@ -19,7 +19,7 @@ def inet_to_str(inet):
 
 
 # input is a pcap file and outputs set of IP addresses (one per line) of victims of an ACK flood attack
-def getIPAddresses(pcap, SYNACKDict, ACKDict, threshold):
+def getIPAddresses(pcap, SYNACKDict, ACKSentDict, ACKReceivedDict, threshold):
 
     # For each packet in the pcap process the contents
     for num, (timestamp, buf) in enumerate(pcap):
@@ -50,35 +50,46 @@ def getIPAddresses(pcap, SYNACKDict, ACKDict, threshold):
                 # add IP address into dictionary
                 else:
                     SYNACKDict[inet_to_str(ip.src)] = 1
-            # Check if sent a SYN packet
+            # Check if ACK packet
             elif (tcp.flags & dpkt.tcp.TH_ACK):
-                # increment number of SYN packets sent in dictionary
-                if (inet_to_str(ip.dst)) in ACKDict:
-                    ACKDict[inet_to_str(ip.dst)] += 1
+                # increment number of ACK received in dictionary
+                if (inet_to_str(ip.dst)) in ACKReceivedDict:
+                    ACKReceivedDict[inet_to_str(ip.dst)] += 1
                 # add IP address into dictionary
                 else:
-                    ACKDict[inet_to_str(ip.dst)] = 1
+                    ACKReceivedDict[inet_to_str(ip.dst)] = 1
+                # increment number of ACK sent in dictionary
+                if(inet_to_str(ip.src) in ACKSentDict):
+                    ACKSentDict[inet_to_str(ip.src)] += 1
+                # add IP address into dictionary
+                else:
+                    ACKSentDict[inet_to_str(ip.src)] = 1
 
     # Array holding victim IP addresses
     victims = []
 
     # Iterate through dictionary of IP addresses that received ACK Packets
-    for packet in ACKDict:
+    for packet in ACKReceivedDict:
+        if(packet in ACKSentDict):
+            if(ACKSentDict[packet] * threshold > ACKReceivedDict[packet]):
+                continue
         # Check if IP address also sent SYN + ACK packets
-        if packet in SYNACKDict:
+        if packet in SYNACKDict:        
             # Check if received 3x more ACK packets than sent SYN + ACK packets
             # If true, append address to result
-            if(ACKDict.get(packet) > threshold * SYNACKDict.get(packet)):
+            if(ACKReceivedDict[packet] > threshold * SYNACKDict[packet]):
                 victims.append(packet)
-        # If only received ACK packets, append address to result
-        else:
+        # If only received ACK packets, check if number of ACK packets is below thresholdappend address to result
+        # account for only recording the end of a TCP handshake
+        elif (ACKReceivedDict[packet] > threshold):
             victims.append(packet)
     
     # Return array of IP addresses, SYNACK dictionary, and ACK dictionary
     return {
         'addresses': victims,
         'SYNACKDict': SYNACKDict,
-        'ACKDict': ACKDict,
+        'ACKSentDict': ACKSentDict,
+        'ACKReceivedDict': ACKReceivedDict,
     }
 
 
@@ -88,17 +99,21 @@ def main():
         pcap = dpkt.pcap.Reader(f)
         # call main function to get list of IP address
         SYNACKDict = {}
-        ACKDict = {}
+        ACKSentDict = {}
+        ACKReceivedDict = {}
         threshold = 3
-        ans = getIPAddresses(pcap, SYNACKDict, ACKDict, threshold)
+        ans = getIPAddresses(pcap, SYNACKDict, ACKSentDict, ACKReceivedDict, threshold)
         # Iterate through result and output each IP addresses line-by-line
         if (len(ans["addresses"]) == 0):
             print("------------------------------------\nNo ACK Flood detected\n------------------------------------")
         else:
-            print("------------------------------------\nACK Flood detected\n------------------------------------\nVictim IP Addresses:\n")
+            print("------------------------------------\nPotential ACK Flood detected\n------------------------------------\nVictim IP Addresses:\n")
             ans["addresses"].sort()
             for x in ans["addresses"]:
                 print(x+"\n")
+                print("Number of SYN-ACK sent: " + str(ans["SYNACKDict"].get(x)) + "\n")
+                print("Number of ACK received: " + str(ans["ACKReceivedDict"].get(x)) + "\n")
+                print("Number of ACK sent: " + str(ans["ACKSentDict"].get(x)) + "\n\n")
             print("Number of victims: " + str(len(ans["addresses"])))
             print("------------------------------------")
         # Return array of IP addresses
